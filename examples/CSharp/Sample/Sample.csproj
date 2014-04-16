@@ -98,7 +98,7 @@
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\ManagedPhantom\ManagedPhantom.csproj">
+    <ProjectReference Include="..\..\..\ManagedPhantom\ManagedPhantom.csproj">
       <Project>{156822DD-878C-4218-A4A0-CDC8BB621603}</Project>
       <Name>OpenHapticsWrapper</Name>
     </ProjectReference>
