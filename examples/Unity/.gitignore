@@ -1,0 +1,14 @@
+*.suo
+*.pdb
+*.pidb
+*.cache
+*.userprefs
+*.unityproj
+*.sln
+*.csproj
+Library
+Temp
+obj
+cache
+metadata
+previews

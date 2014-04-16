@@ -1,4 +1,4 @@
 ManagedPhantom
 ==============
 
-C# wrapper for Sensable PHANTOM
+A C# (.NET) wrapper for Sensable PHANTOM Device.
