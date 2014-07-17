@@ -323,16 +323,15 @@ namespace ManagedPhantom
         [DllImport("hd.dll")]
         public static extern double hdGetSchedulerTimeStamp();
 
-        [DllImport("hd.dll")]
-        [return: MarshalAs(UnmanagedType.U4)]
-        public static extern uint hdScheduleAsynchronous([MarshalAs(UnmanagedType.FunctionPtr)] SchedulerCallback callback, IntPtr userData, ushort priority);
+        [DllImport("hd.dll", CallingConvention=CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.U8)]
+        public static extern ulong hdScheduleAsynchronous([MarshalAs(UnmanagedType.FunctionPtr)] SchedulerCallback callback, IntPtr userData, ushort priority);
 
-        [DllImport("hd.dll")]
-        [return: MarshalAs(UnmanagedType.U4)]
+        [DllImport("hd.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern void hdScheduleSynchronous([MarshalAs(UnmanagedType.FunctionPtr)] SchedulerCallback callback, IntPtr userData, ushort priority);
 
         [DllImport("hd.dll")]
-        public static extern void hdUnschedule([MarshalAs(UnmanagedType.U4)] uint schedulerHandle);
+        public static extern void hdUnschedule([MarshalAs(UnmanagedType.U8)] ulong schedulerHandle);
 
         /// <summary>
         /// コールバックが1秒間に何回呼ばれるかを指定

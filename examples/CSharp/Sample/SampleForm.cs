@@ -22,6 +22,7 @@
 using System;
 using System.Windows.Forms;
 using ManagedPhantom;
+using ManagedPhantom.Structs;
 
 namespace Sample
 {
@@ -39,13 +40,22 @@ namespace Sample
         /// <summary>
         /// PHANTOM手先をこの座標に吸着させます
         /// </summary>
-        SimplePhantom.Vector3D TargetPosition = new SimplePhantom.Vector3D(0.0, -20.0, 5.0);   // PHANTOM座標系の値。単位 [mm]
+        Vector3D TargetPosition = new Vector3D(0.0, -20.0, 5.0);   // PHANTOM座標系の値。単位 [mm]
 
         /// <summary>
-        /// PHANTOM手先座標をここに記憶
+        /// PHANTOM手先座標 [mm]
         /// </summary>
-        SimplePhantom.Vector3D HandPosition;
+        Vector3D HandPosition;
         
+        /// <summary>
+        /// PHANTOM手先速度 [mm/s]
+        /// </summary>
+        Vector3D HandVelocity;
+
+        /// <summary>
+        /// 剛体の仮想球体
+        /// </summary>
+        ManagedPhantom.RigidPrimitives.Orb[] RigidOrbs;
 
         /// <summary>
         /// フォーム（ウィンドウ）のコンストラクタ
@@ -65,7 +75,14 @@ namespace Sample
         {
             // PHANTOMの準備
             Phantom = new SimplePhantom();     // デフォルトのPHANTOMデバイスに接続
-            Phantom.AddSchedule(MainLogic);    // 1kHzで呼ばれるメソッドを指定
+            Phantom.AddSchedule(ServoLoop);    // 1kHzで呼ばれるメソッドを指定
+
+            // 球体を1つ作成
+            RigidOrbs = new ManagedPhantom.RigidPrimitives.Orb[1];
+            RigidOrbs[0] = new ManagedPhantom.RigidPrimitives.Orb(
+                new Vector3D(0.0, 0.0, 0.0),    // 球体の中心座標 [mm]
+                30.0                            // 球体の半径 [mm]
+                );
         }
 
 
@@ -74,29 +91,19 @@ namespace Sample
         /// ここで発揮力を設定するなどの処理を行う。
         /// </summary>
         /// <returns>実行を繰り返したい場合はtrueを返す</returns>
-        private bool MainLogic()
+        private bool ServoLoop()
         {
-            // ある一点に吸着するサンプルです
+            // 現在のPHANTOM情報
+            HandPosition = Phantom.GetPosition();   // ジンバル部座標 [mm]
+            HandVelocity = Phantom.GetVelocity();   // ジンバル部速度 [mm/s]
 
-            // 定数
-            const double stiffness = 0.05;              // バネ定数 k [N/mm]
-            const double gravityWellInfluence = 30;     // 手先から吸着点までがこの距離未満なら吸着 [mm]
+            // PHANTOMで発生させる力ベクトル [N]
+            Vector3D force = Vector3D.Zero;
 
-            // PHANTOM情報取得
-            HandPosition = Phantom.GetPosition();               // PHANTOM手先座標 [mm]
-
-            // 変数
-            SimplePhantom.Vector3D vector = TargetPosition - HandPosition;    // 手先から吸着点に向かうベクトル [mm]
-            SimplePhantom.Vector3D force;                                     // PHANTOMで発生させる力のベクトル [N]
-
-            // 影響範囲内ならば距離に比例した力を与え、そうでなければ0とする
-            if (vector.Length < gravityWellInfluence)
+            // 剛体の球体を表現
+            foreach (ManagedPhantom.RigidPrimitives.Orb orb in RigidOrbs)
             {
-                force = stiffness * vector; // F = kx [N]
-            }
-            else
-            {
-                force = SimplePhantom.Vector3D.Zero;      // F = 0 [N]
+                force += orb.CalculateForce(HandPosition);
             }
 
             // PHANTOMの発揮力を設定
@@ -106,6 +113,8 @@ namespace Sample
             return true;
         }
 
+
+        #region GUI events
 
         /// <summary>
         /// スタートボタンを押された時に呼ばれる
@@ -146,9 +155,12 @@ namespace Sample
         /// <param name="e"></param>
         private void displayTimer_Tick(object sender, EventArgs e)
         {
-            // MainLogic() の中ではテキストボックスに表示させられないので、別の間隔で表示を更新します
+            // ServoLoop() の中ではテキストボックスに表示できないため、別の間隔で表示を更新します
 
             positionTextBox.Text = HandPosition.ToString(); // 現在の手先座標を表示
         }
+
+        #endregion
+
     }
 }

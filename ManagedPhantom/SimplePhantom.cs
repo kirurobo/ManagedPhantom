@@ -21,6 +21,7 @@
 
 using System;
 using System.Collections.Generic;
+using ManagedPhantom.Structs;
 
 namespace ManagedPhantom
 {
@@ -30,10 +31,12 @@ namespace ManagedPhantom
     public class SimplePhantom
     {
         uint hHD = (uint)Hd.DeviceHandle.HD_INVALID_HANDLE;     // デバイスハンドル
-        Hd.ErrorInfo LastError;                                 // 最後に発生したエラー（HD_SUCCESSは対象外）
 
         List<Hd.SchedulerCallback> CallbackMethods;     // 参照が無くなるとGCされるので、メソッドを保持
-        List<uint> ScheduleHandles;                     // HDAPIDでスケジューリングした際のハンドルを保持
+        List<ulong> ScheduleHandles;                     // HDAPIDでスケジューリングした際のハンドルを保持
+        private Buttons CurrentButtons = Buttons.None;	// 現在のPHANTOMボタン押下状況
+        private Buttons LastButtons = Buttons.None;	    // 前回Update時のPHANTOMボタン
+        
 
         /// <summary>
         /// 可動範囲下限 [mm]
@@ -59,6 +62,11 @@ namespace ManagedPhantom
         /// 机の面に相当するY座標 [mm]
         /// </summary>
         public double TableTopOffset { get; private set; }
+
+        /// <summary>
+        /// ジンバル部を基準としたペン先端の座標 [mm] (PHANTOM座標系)
+        /// </summary>
+        public Vector3D TipOffset = new Vector3D(0.0, 0.0, -40.0);
 
         /// <summary>
         /// PHANTOMの処理が実行中なら true とする
@@ -87,7 +95,7 @@ namespace ManagedPhantom
             CallbackMethods = new List<Hd.SchedulerCallback>();
 
             // スケジューリングされたメソッドのハンドルをこれで保持
-            ScheduleHandles = new List<uint>();
+            ScheduleHandles = new List<ulong>();
 
             // 可動範囲を取得
             LoadWorkspaceLimit();
@@ -104,7 +112,7 @@ namespace ManagedPhantom
             if (hHD != (uint)Hd.DeviceHandle.HD_INVALID_HANDLE)
             {
                 Hd.hdDisableDevice(hHD);
-                ErrorCheck();
+                ErrorCheck("Disable device");
             }
         }
 
@@ -118,11 +126,11 @@ namespace ManagedPhantom
 
             // 力を発生させるのは標準でON
             Hd.hdEnable(Hd.Capability.HD_FORCE_OUTPUT);
-            ErrorCheck();
+            ErrorCheck("Enable force output");
 
             // 非同期処理も開始
             Hd.hdStartScheduler();
-            ErrorCheck();
+            ErrorCheck("Start scheduler");
 
             IsRunning = true;
         }
@@ -134,14 +142,14 @@ namespace ManagedPhantom
         {
             if (!IsRunning) return;
 
+            IsRunning = false;
+
             Hd.hdStopScheduler();
-            ErrorCheck();
+            ErrorCheck("StopScheduler");
 
             // 力も停止
             Hd.hdDisable(Hd.Capability.HD_FORCE_OUTPUT);
-            ErrorCheck();
-
-            IsRunning = false;
+            ErrorCheck("Disable force output");
         }
 
         /// <summary>
@@ -154,7 +162,7 @@ namespace ManagedPhantom
                 IntPtr.Zero,
                 Hd.Priority.HD_DEFAULT_SCHEDULER_PRIORITY
                 );
-            ErrorCheck();
+            ErrorCheck("ScheduleSynchronous");
         }
 
         /// <summary>
@@ -169,13 +177,12 @@ namespace ManagedPhantom
                 };
             CallbackMethods.Add(method);
 
-            uint handle = Hd.hdScheduleAsynchronous(
+            ulong handle = Hd.hdScheduleAsynchronous(
                 method,
                 IntPtr.Zero,
                 Hd.Priority.HD_DEFAULT_SCHEDULER_PRIORITY
                 );
-            ErrorCheck();
-
+			ErrorCheck("ScheduleAsynchronous");
             ScheduleHandles.Add(handle);
         }
 
@@ -203,7 +210,7 @@ namespace ManagedPhantom
             foreach (uint handle in ScheduleHandles)
             {
                 Hd.hdUnschedule(handle);
-                ErrorCheck();
+                ErrorCheck("Unschedule #" + handle.ToString());
             }
             ScheduleHandles.Clear();
             CallbackMethods.Clear();
@@ -231,6 +238,24 @@ namespace ManagedPhantom
             double[] position = new double[3] { 0, 0, 0 };
             Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_POSITION, position);
             return new Vector3D(position);
+        }
+
+        /// <summary>
+        /// ペン先端の座標を返します
+        /// </summary>
+        /// <returns>ペン先端座標 [mm]</returns>
+        public Vector3D GetTipPosition()
+        {
+            double[] position = new double[3] { 0, 0, 0 };
+            double[] matrix = new double[16];
+            Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_POSITION, position);
+            Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_TRANSFORM, matrix);
+
+            return new Vector3D(
+                (position[0] + matrix[0] * TipOffset.X + matrix[4] * TipOffset.Y + matrix[8] * TipOffset.Z),
+                (position[1] + matrix[1] * TipOffset.X + matrix[5] * TipOffset.Y + matrix[9] * TipOffset.Z),
+                (position[2] + matrix[2] * TipOffset.X + matrix[6] * TipOffset.Y + matrix[10] * TipOffset.Z)
+                );
         }
 
         /// <summary>
@@ -279,6 +304,38 @@ namespace ManagedPhantom
         }
 
         /// <summary>
+        /// PHANTOのボタン押下状況を更新
+        /// GetButtonDown(), GetButtonUp() を利用する際はそのタイミングでこれを呼ぶこと。
+        /// </summary>
+        /// <returns>The buttons.</returns>
+        public Buttons UpdateButtons()
+        {
+            LastButtons = CurrentButtons;
+            CurrentButtons = GetButton();
+            return CurrentButtons;
+        }
+
+        /// <summary>
+        /// 指定されたボタンがまさに押されたところならばtrueを返す
+        /// </summary>
+        /// <returns><c>true</c>, if button was down, <c>false</c> otherwise.</returns>
+        /// <param name="button">Button.</param>
+        public bool GetButtonDown(Buttons button)
+        {
+            return (((LastButtons & button) == Buttons.None) && ((CurrentButtons & button) == button));
+        }
+
+        /// <summary>
+        /// 指定されたボタンがまさに離されたところならばtrueを返す
+        /// </summary>
+        /// <returns><c>true</c>, if button was up, <c>false</c> otherwise.</returns>
+        /// <param name="button">Button.</param>
+        public bool GetButtonUp(Buttons button)
+        {
+            return (((LastButtons & button) == button) && ((CurrentButtons & button) == Buttons.None));
+        }
+
+        /// <summary>
         /// サーボループ開始からの経過時間を取得します
         /// </summary>
         /// <returns>時間 [s]</returns>
@@ -312,252 +369,53 @@ namespace ManagedPhantom
 
             // 可動限界範囲を取得
             Hd.hdGetDoublev(Hd.ParameterName.HD_MAX_WORKSPACE_DIMENSIONS, val);
-            ErrorCheck();
+            ErrorCheck("Getting max workspace");
             WorkspaceMinimum = new Vector3D(val[0], val[1], val[2]);
             WorkspaceMaximum = new Vector3D(val[3], val[4], val[5]);
 
             // 推奨可動範囲を取得
             Hd.hdGetDoublev(Hd.ParameterName.HD_USABLE_WORKSPACE_DIMENSIONS, val);
-            ErrorCheck();
+            ErrorCheck("Getting usable workspace");
             UsableWorkspaceMinimum = new Vector3D(val[0], val[1], val[2]);
             UsableWorkspaceMaximum = new Vector3D(val[3], val[4], val[5]);
 
             // 机の高さを取得
             float[] offset = new float[1];
             Hd.hdGetFloatv(Hd.ParameterName.HD_TABLETOP_OFFSET, offset);
-            ErrorCheck();
+            ErrorCheck("Getting table-top offset");
             TableTopOffset = (double)offset[0];
         }
 
         /// <summary>
         /// 直前のHDAPI呼び出しでエラーがあれば、例外を発生させます
         /// </summary>
-        private void ErrorCheck()
+        static private void ErrorCheck()
+        {
+           ErrorCheck("");
+        }
+
+        /// <summary>
+        /// 直前のHDAPI呼び出しでエラーがあれば、例外を発生させます
+        /// </summary>
+        /// <param name="situation">何をしていたかを伝える文字列</param>
+        static private void ErrorCheck(string situation)
         {
             Hd.ErrorInfo error;
 
             if (Hd.IsError(error = Hd.hdGetError()))
             {
-                LastError = error;
                 string message = Hd.GetErrorString(error.ErrorCode);
 
-                System.Diagnostics.Debug.WriteLine("HDAPI error : " + message);
-                throw new HdApiException(message);
-            }
-        }
-        #endregion
-
-
-
-        #region ベクトル、行列構造体
-        /// <summary>
-        /// 3次元ベクトル
-        /// </summary>
-        public struct Vector3D
-        {
-            /// <summary>
-            /// X成分または第1成分の値
-            /// </summary>
-            public double X;
-
-            /// <summary>
-            /// Y成分または第2成分の値
-            /// </summary>
-            public double Y;
-
-            /// <summary>
-            /// Z成分または第3成分の値
-            /// </summary>
-            public double Z;
-
-            /// <summary>
-            /// 3成分からベクトルを作成します
-            /// </summary>
-            /// <param name="x"></param>
-            /// <param name="y"></param>
-            /// <param name="z"></param>
-            public Vector3D(double x, double y, double z)
-            {
-                X = x;
-                Y = y;
-                Z = z;
-            }
-
-            /// <summary>
-            /// 配列を元にベクトルを作成します
-            /// </summary>
-            /// <param name="value"></param>
-            public Vector3D(double[] value)
-            {
-                X = value[0];
-                Y = value[1];
-                Z = value[2];
-            }
-
-            /// <summary>
-            /// ベクトル1とベクトル2を加算した結果を返します
-            /// </summary>
-            /// <param name="v1">ベクトル1</param>
-            /// <param name="v2">ベクトル2</param>
-            /// <returns>2つのベクトルの和</returns>
-            public static Vector3D operator +(Vector3D v1, Vector3D v2)
-            {
-                return new Vector3D(v1.X + v2.X, v1.Y + v2.Y, v1.Z + v2.Z);
-            }
-
-            /// <summary>
-            /// ベクトル1からベクトル2を引いた結果を返します
-            /// </summary>
-            /// <param name="v1">ベクトル1</param>
-            /// <param name="v2">ベクトル2</param>
-            /// <returns>2つのベクトルの差</returns>
-            public static Vector3D operator -(Vector3D v1, Vector3D v2)
-            {
-                return new Vector3D(v1.X - v2.X, v1.Y - v2.Y, v1.Z - v2.Z);
-            }
-
-            /// <summary>
-            /// ベクトルを定数倍します
-            /// </summary>
-            /// <param name="vec">元のベクトル</param>
-            /// <param name="scale">係数</param>
-            /// <returns>スケーリング後のベクトル</returns>
-            public static Vector3D operator *(Vector3D vec, double scale)
-            {
-                return new Vector3D(vec.X * scale, vec.Y * scale, vec.Z * scale);
-            }
-
-            /// <summary>
-            /// ベクトルを定数倍します
-            /// </summary>
-            /// <param name="scale">係数</param>
-            /// <param name="vec">元のベクトル</param>
-            /// <returns>スケーリング後のベクトル</returns>
-            public static Vector3D operator *(double scale, Vector3D vec)
-            {
-                return new Vector3D(vec.X * scale, vec.Y * scale, vec.Z * scale);
-            }
-
-            /// <summary>
-            /// ベクトルに定数の逆数をかけます
-            /// </summary>
-            /// <param name="vec">元のベクトル</param>
-            /// <param name="scale">係数</param>
-            /// <returns>スケーリング後のベクトル</returns>
-            public static Vector3D operator /(Vector3D vec, double scale)
-            {
-                return new Vector3D(vec.X / scale, vec.Y / scale, vec.Z / scale);
-            }
-
-            /// <summary>
-            /// ベクトルの長さを取得します
-            /// </summary>
-            public double Length
-            {
-                get
+                if (situation.Equals(""))
                 {
-                    return Math.Sqrt(this.X * this.X + this.Y * this.Y + this.Z * this.Z);
+                    System.Diagnostics.Debug.WriteLine("HDAPI error : " + message);
+                    throw new HdApiException(message);
                 }
-            }
-
-            /// <summary>
-            /// 配列形式でもアクセス可能とするインデクサ
-            /// </summary>
-            /// <param name="i"></param>
-            /// <returns></returns>
-            public double this[int i]
-            {
-                set
+                else
                 {
-                    switch (i)
-                    {
-                        case 0: X = value; break;
-                        case 1: Y = value; break;
-                        case 2: Z = value; break;
-                    }
+                    System.Diagnostics.Debug.WriteLine("HDAPI error : " + situation + " / " + message);
+                    throw new HdApiException(situation + " / " + message);
                 }
-
-                get
-                {
-                    switch (i)
-                    {
-                        case 0: return X;
-                        case 1: return Y;
-                        case 2: return Z;
-                    }
-                    return 0;
-                }
-            }
-
-            /// <summary>
-            /// 値を配列として取得します
-            /// </summary>
-            /// <returns></returns>
-            public double[] ToArray()
-            {
-                return new double[] { X, Y, Z };
-            }
-
-            /// <summary>
-            /// 値をコンマ区切りの文字列で取得します
-            /// </summary>
-            /// <returns></returns>
-            public override string ToString()
-            {
-                return String.Format("{0:F3}, {1:F3}, {2:F3}", X, Y, Z);
-            }
-
-            /// <summary>
-            /// 全成分が0のベクトル
-            /// </summary>
-            public static Vector3D Zero = new Vector3D(0, 0, 0);
-        }
-
-        /// <summary>
-        /// 4×4行列
-        /// </summary>
-        public struct Matrix
-        {
-            double[] Value;
-
-            /// <summary>
-            /// 配列を元に行列を作成します
-            /// </summary>
-            /// <param name="value"></param>
-            public Matrix(double[] value)
-            {
-                Value = new double[16];
-                value.CopyTo(Value, 0);
-            }
-
-            /// <summary>
-            /// 値を配列として取得します
-            /// </summary>
-            /// <returns></returns>
-            public double[] ToArray()
-            {
-                return Value;
-            }
-
-            /// <summary>
-            /// 配列形式でもアクセス可能とするインデクサ
-            /// </summary>
-            /// <param name="i"></param>
-            /// <returns></returns>
-            public double this[int i]
-            {
-                get { return Value[i]; }
-                set { Value[i] = value; }
-            }
-
-            /// <summary>
-            /// 値をコンマ区切りの文字列で取得します
-            /// </summary>
-            /// <returns></returns>
-            public override string ToString()
-            {
-                return
-                    String.Format("[ [{0:F3}, {1:F3}, {2:F3}, {3:F3}]^T, [{4:F3}, {5:F3}, {6:F3}, {7:F3}]^T, [{8:F3}, {9:F3}, {10:F3}, {11:F3}]^T, [{12:F3}, {13:F3}, {14:F3}, {15:F3}]^T ]", Value);
             }
         }
         #endregion

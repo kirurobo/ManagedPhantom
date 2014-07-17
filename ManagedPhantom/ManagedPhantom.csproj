@@ -55,6 +55,8 @@
     <Reference Include="System.Core" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="RigidPrimitives\Orb.cs" />
+    <Compile Include="Structs.cs" />
     <Compile Include="hd.cs" />
     <Compile Include="SimplePhantom.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
