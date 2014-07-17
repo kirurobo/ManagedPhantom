@@ -14,6 +14,7 @@ http://opensource.org/licenses/mit-license.php
 
 ■ 内容物
 ・HaPudding … Haptic Pudding サンプルプロジェクト
+・RigidSpheres … 球状の剛体のサンプル
 
 
 ■ 必要環境
@@ -31,6 +32,7 @@ http://opensource.org/licenses/mit-license.php
 
 
 ■ 更新履歴
+2014/07/17	球体のサンプルを追加
 2014/04/16	初版
 
 

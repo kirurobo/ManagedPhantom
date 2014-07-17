@@ -34,7 +34,20 @@ using ManagedPhantom;
 public class SimplePhantomUnity {
 	uint hHD = (uint)Hd.DeviceHandle.HD_INVALID_HANDLE;     // デバイスハンドル
 	List<Hd.SchedulerCallback> CallbackMethods;     // 参照が無くなるとGCされるので、メソッドを保持
-	List<ulong> ScheduleHandles;                     // HDAPIDでスケジューリングした際のハンドルを保持
+	private List<ulong> ScheduleHandles;                     // HDAPIDでスケジューリングした際のハンドルを保持
+	private Buttons CurrentButtons = Buttons.None;	// 現在のPHANTOMボタン押下状況
+	private Buttons LastButtons = Buttons.None;	// 前回Update時のPHANTOMボタン
+
+	/// <summary>
+	/// PHANToMに接続できていればtrue
+	/// </summary>
+	/// <value><c>true</c> if this instance is avairable; otherwise, <c>false</c>.</value>
+	internal bool IsAvailable { get { return hHD != (uint)Hd.DeviceHandle.HD_INVALID_HANDLE; }}
+
+	/// <summary>
+	/// ジンバル部を基準としたペン先端座標 [mm] (PHANTOM座標系)
+	/// </summary>
+	public Vector3 TipOffset = new Vector3(0.0f, 0.0f, -40.0f);
 	
 	/// <summary>
 	/// 可動範囲下限 [mm]
@@ -64,8 +77,9 @@ public class SimplePhantomUnity {
 	/// <summary>
 	/// PHANTOMの処理が実行中なら true とする
 	/// </summary>
-	public bool IsRunning { get; private set; }
-	
+	public bool IsRunning = false;
+
+
 	/// <summary>
 	/// 非同期で呼ばれるメソッドです
 	/// </summary>
@@ -82,7 +96,7 @@ public class SimplePhantomUnity {
 		
 		// デフォルトのデバイスを準備
 		hHD = Hd.hdInitDevice(Hd.DeviceHandle.HD_DEFAULT_DEVICE);
-		ErrorCheck();
+		ErrorCheck("Initialize device");
 		
 		// コールバックメソッドを保持するリスト
 		CallbackMethods = new List<Hd.SchedulerCallback>();
@@ -93,7 +107,7 @@ public class SimplePhantomUnity {
 		// 可動範囲を取得
 		LoadWorkspaceLimit();
 	}
-	
+
 	/// <summary>
 	/// デバイスの使用を終了し、切断します
 	/// </summary>
@@ -101,11 +115,13 @@ public class SimplePhantomUnity {
 	{
 		Stop();
 		ClearSchedule();
-		
+
 		if (hHD != (uint)Hd.DeviceHandle.HD_INVALID_HANDLE)
 		{
 			Hd.hdDisableDevice(hHD);
-			ErrorCheck();
+			ErrorCheck("Disable device");
+
+			hHD = (uint)Hd.DeviceHandle.HD_INVALID_HANDLE;
 		}
 	}
 	
@@ -115,15 +131,15 @@ public class SimplePhantomUnity {
 	/// </summary>
 	public void Start()
 	{
-		if (IsRunning) return;
+		if (!IsAvailable || IsRunning) return;
 		
 		// 力を発生させるのは標準でON
 		Hd.hdEnable(Hd.Capability.HD_FORCE_OUTPUT);
-		ErrorCheck();
+		ErrorCheck("Enable force output");
 
 		// 非同期処理も開始
 		Hd.hdStartScheduler();
-		ErrorCheck();
+		ErrorCheck("Start scheduler");
 
 		IsRunning = true;
 	}
@@ -133,16 +149,23 @@ public class SimplePhantomUnity {
 	/// </summary>
 	public void Stop()
 	{
-		if (!IsRunning) return;
-		
-		Hd.hdStopScheduler();
-		ErrorCheck();
-		
-		// 力も停止
-		Hd.hdDisable(Hd.Capability.HD_FORCE_OUTPUT);
-		ErrorCheck();
+		if (!IsAvailable || !IsRunning) return;
 		
 		IsRunning = false;
+
+		////System.Threading.Thread.Sleep (10);
+		//foreach (uint handle in ScheduleHandles)
+		//{
+		//	Hd.hdWaitForCompletion(handle, Hd.WaiteCode.HD_WAIT_INFINITE);
+		//	ErrorCheck("Waiting for completion");
+		//}
+
+		Hd.hdStopScheduler();
+		ErrorCheck("StopScheduler");
+
+		// 力も停止
+		Hd.hdDisable(Hd.Capability.HD_FORCE_OUTPUT);
+		ErrorCheck("Disable force output");
 	}
 	
 	/// <summary>
@@ -152,12 +175,12 @@ public class SimplePhantomUnity {
 	{
 		Hd.hdScheduleSynchronous(
 			(data) => { return DoCallback(callback); },
-		IntPtr.Zero,
-		Hd.Priority.HD_DEFAULT_SCHEDULER_PRIORITY
-		);
-		ErrorCheck();
+			IntPtr.Zero,
+			Hd.Priority.HD_DEFAULT_SCHEDULER_PRIORITY
+			);
+		ErrorCheck("ScheduleSynchronous");
 	}
-	
+
 	/// <summary>
 	/// 非同期実行にメソッドを追加します
 	/// </summary>
@@ -169,17 +192,16 @@ public class SimplePhantomUnity {
 			return DoCallback(callback);
 		};
 		CallbackMethods.Add(method);
-		
+
 		ulong handle = Hd.hdScheduleAsynchronous(
 			method,
 			IntPtr.Zero,
 			Hd.Priority.HD_DEFAULT_SCHEDULER_PRIORITY
 			);
-		ErrorCheck();
-		
+		ErrorCheck("ScheduleAsynchronous");
 		ScheduleHandles.Add(handle);
 	}
-	
+
 	/// <summary>
 	/// コールバックメソッド呼び出しをより簡略化するためのラップ
 	/// </summary>
@@ -188,14 +210,14 @@ public class SimplePhantomUnity {
 	private Hd.CallbackResult DoCallback(Callback callback)
 	{
 		bool result;
-		
+
 		Hd.hdBeginFrame(hHD);
-		ErrorCheck();
+		ErrorCheck("BeginFrame");
 
 		result = callback();
 
 		Hd.hdEndFrame(hHD);
-		ErrorCheck();
+		ErrorCheck("EndFrame");
 		
 		return (result ? Hd.CallbackResult.HD_CALLBACK_CONTINUE : Hd.CallbackResult.HD_CALLBACK_DONE);
 	}
@@ -208,7 +230,7 @@ public class SimplePhantomUnity {
 		foreach (uint handle in ScheduleHandles)
 		{
 			Hd.hdUnschedule(handle);
-			ErrorCheck();
+			ErrorCheck("Unschedule #" + handle.ToString());
 		}
 		ScheduleHandles.Clear();
 		CallbackMethods.Clear();
@@ -221,7 +243,7 @@ public class SimplePhantomUnity {
 	public void SetSchedulerRate(uint rate)
 	{
 		Hd.hdSetSchedulerRate(rate);
-		ErrorCheck();
+		ErrorCheck("Set scheduler rate");
 	}
 	
 	#endregion
@@ -230,7 +252,7 @@ public class SimplePhantomUnity {
 	/// <summary>
 	/// 現在のPHANTOM手先座標を返します
 	/// </summary>
-	/// <returns>位置ベクトル [mm]</returns>
+	/// <returns>ジンバル座標 [mm]</returns>
 	public Vector3 GetPosition()
 	{
 		double[] position = new double[3] { 0, 0, 0 };
@@ -247,6 +269,25 @@ public class SimplePhantomUnity {
 		double[] velocity = new double[3] { 0, 0, 0 };
 		Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_VELOCITY, velocity);
 		return new Vector3((float)velocity[0], (float)velocity[1], -(float)velocity[2]);
+	}
+
+	/// <summary>
+	/// ペン先端の座標を返します
+	/// </summary>
+	/// <returns>ペン先端座標 [mm]</returns>
+	public Vector3 GetTipPosition()
+	{
+		double[] position = new double[3] { 0, 0, 0 };
+		double[] matrix = new double[16];
+		Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_POSITION, position);
+		Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_TRANSFORM, matrix);
+		
+		Vector3 tipPosition;
+		tipPosition.x = (float)(position[0] + matrix[0] * TipOffset.x + matrix[4] * TipOffset.y + matrix[8] * TipOffset.z);
+		tipPosition.y = (float)(position[1] + matrix[1] * TipOffset.x + matrix[5] * TipOffset.y + matrix[9] * TipOffset.z);
+		tipPosition.z = -(float)(position[2] + matrix[2] * TipOffset.x + matrix[6] * TipOffset.y + matrix[10] * TipOffset.z);
+		
+		return tipPosition;
 	}
 
 	//　↓たぶん誰も使わないし、Unity座標系への変換をしていないのでコメントアウト
@@ -270,12 +311,55 @@ public class SimplePhantomUnity {
 	{
 		double[] matrix = new double[16];
 		Hd.hdGetDoublev(Hd.ParameterName.HD_CURRENT_TRANSFORM, matrix);
-		double qw = Math.Sqrt(1f + matrix[0] + matrix[5] + matrix[10]) / 2;
-		double w = 4 * qw;
-		double qx = (matrix[6] - matrix[9]) / w;
-		double qy = (matrix[8] - matrix[2]) / w;
-		double qz = (matrix[1] - matrix[4]) / w;
-		return new Quaternion((float)-qx, (float)-qy, (float)qz, (float)qw);
+//
+//		double qw = Math.Sqrt(1f + matrix[0] + matrix[5] + matrix[10]) / 2;
+//		double w = 4 * qw;
+//		double qx = (matrix[6] - matrix[9]) / w;
+//		double qy = (matrix[8] - matrix[2]) / w;
+//		double qz = (matrix[1] - matrix[4]) / w;
+//		return new Quaternion((float)-qx, (float)-qy, (float)qz, (float)qw);
+		
+		double t = 1.0 + matrix[0] + matrix[5] + matrix[10];
+		double s;
+		double qw, qx, qy, qz;
+		if (t >= 1.0) {
+			s = 0.5 / Math.Sqrt(t);
+			qw = 0.25 / s;
+			qx = (matrix[6] - matrix[9]) * s;
+			qy = (matrix[8] - matrix[2]) * s;
+			qz = (matrix[1] - matrix[4]) * s;
+		} else {
+			double max;
+			if (matrix[5] > matrix[10]) {
+				max = matrix[5];
+			} else {
+				max = matrix[10];
+			}
+			
+			if (max < matrix[0]) {
+				t = Math.Sqrt(matrix[0] - (matrix[5] + matrix[10]) + 1.0);
+				s = 0.5 / t;
+				qw = (matrix[6] - matrix[9]) * s;
+				qx = t * 0.5;
+				qy = (matrix[1] + matrix[4]) * s;
+				qz = (matrix[8] + matrix[2]) * s;
+			} else if (max == matrix[5]) {
+				t = Math.Sqrt(matrix[5] - (matrix[10] + matrix[0]) + 1.0);
+				s = 0.5 / t;
+				qw = (matrix[8] - matrix[2]) * s;
+				qx = (matrix[1] + matrix[4]) * s;
+				qy = t * 0.5;
+				qz = (matrix[6] + matrix[9]) * s;
+			} else {
+				t = Math.Sqrt(matrix[10] - (matrix[0] + matrix[5]) + 1.0);
+				s = 0.5 / t;
+				qw = (matrix[1] - matrix[4]) * s;
+				qx = (matrix[8] + matrix[2]) * s;
+				qy = (matrix[6] + matrix[9]) * s;
+				qz = t * 0.5;
+			}
+		}
+		return new Quaternion(-(float)qx, -(float)qy, (float)qz, (float)qw);
 	}
 
 	/// <summary>
@@ -288,7 +372,36 @@ public class SimplePhantomUnity {
 		Hd.hdGetIntegerv(Hd.ParameterName.HD_CURRENT_BUTTONS, button);
 		return (Buttons)button[0];
 	}
+
+	/// <summary>
+	/// PHANTOのボタン押下状況を更新
+	/// </summary>
+	/// <returns>The buttons.</returns>
+	public Buttons UpdateButtons()
+	{
+		LastButtons = CurrentButtons;
+		CurrentButtons = GetButton();
+		return CurrentButtons;
+	}
 	
+	/// <summary>
+	/// 指定されたボタンがまさに押されたところならばtrueを返す
+	/// </summary>
+	/// <returns><c>true</c>, if button was down, <c>false</c> otherwise.</returns>
+	/// <param name="button">Button.</param>
+	public bool GetButtonDown(Buttons button) {
+		return (((LastButtons & button) == Buttons.None) && ((CurrentButtons & button) == button));
+	}
+	
+	/// <summary>
+	/// 指定されたボタンがまさに離されたところならばtrueを返す
+	/// </summary>
+	/// <returns><c>true</c>, if button was up, <c>false</c> otherwise.</returns>
+	/// <param name="button">Button.</param>
+	public bool GetButtonUp(Buttons button) {
+		return (((LastButtons & button) == button) && ((CurrentButtons & button) == Buttons.None));
+	}
+
 	/// <summary>
 	/// サーボループ開始からの経過時間を取得します
 	/// </summary>
@@ -326,36 +439,47 @@ public class SimplePhantomUnity {
 		
 		// 可動限界範囲を取得
 		Hd.hdGetDoublev(Hd.ParameterName.HD_MAX_WORKSPACE_DIMENSIONS, val);
-		ErrorCheck();
+		ErrorCheck("Getting max workspace");
 		WorkspaceMinimum = new Vector3((float)val[0], (float)val[1], -(float)val[2]);
 		WorkspaceMaximum = new Vector3((float)val[3], (float)val[4], -(float)val[5]);
 		
 		// 推奨可動範囲を取得
 		Hd.hdGetDoublev(Hd.ParameterName.HD_USABLE_WORKSPACE_DIMENSIONS, val);
-		ErrorCheck();
+		ErrorCheck("Getting usable workspace");
 		UsableWorkspaceMinimum = new Vector3((float)val[0], (float)val[1], -(float)val[2]);
 		UsableWorkspaceMaximum = new Vector3((float)val[3], (float)val[4], -(float)val[5]);
 		
 		// 机の高さを取得
 		float[] offset = new float[1];
 		Hd.hdGetFloatv(Hd.ParameterName.HD_TABLETOP_OFFSET, offset);
-		ErrorCheck();
+		ErrorCheck("Getting table-top offset");
 		TableTopOffset = (float)offset[0];
 	}
-	
+
 	/// <summary>
 	/// 直前のHDAPI呼び出しでエラーがあれば、例外を発生させます
 	/// </summary>
-	private void ErrorCheck()
+	static private void ErrorCheck() {
+		ErrorCheck("");
+	}
+
+	/// <summary>
+	/// 直前のHDAPI呼び出しでエラーがあれば、例外を発生させます
+	/// </summary>
+	/// <param name="situation">何をしていたかを伝える文字列</param>
+	static private void ErrorCheck(string situation)
 	{
 		Hd.ErrorInfo error;
 		
 		if (Hd.IsError(error = Hd.hdGetError()))
 		{
-			string message = Hd.GetErrorString(error.ErrorCode);
-			
-			Debug.LogError("HDAPI error : " + message);
-			//throw new  UnityException("SimplePhantom : " + message);
+			string errorMessage = Hd.GetErrorString(error.ErrorCode);
+
+			if (situation.Equals("")) {
+				throw new UnityException("HDAPI : " + errorMessage);
+			} else {
+				throw new UnityException(situation + " / HDAPI : " + errorMessage);
+			}
 		}
 	}
 	#endregion
