@@ -55,7 +55,8 @@ public class HapticPen : MonoBehaviour {
 	/// 最初に有効化されたとき1回のみ実行
 	/// </summary>
 	void Awake() {
-		Phantom = new SimplePhantomUnity();
+        //Phantom = new SimplePhantomUnity();
+        Phantom = SimplePhantomUnity.GetInstance();
 
 		// 繰り返し実行させるメソッドを指定
 		Phantom.AddSchedule(PhantomUpdate);
@@ -72,13 +73,29 @@ public class HapticPen : MonoBehaviour {
 	/// 無効化されたとき
 	/// </summary>
 	void OnDisable() {
-		Phantom.Close();
+		Phantom.Stop();
 	}
 
-	/// <summary>
-	/// 開始時の処理
-	/// </summary>
-	void Start () {
+    /// <summary>
+    /// 現状、終了しようとしても応答しなくなるため、スタンドアローンならば強制的に終了
+    /// </summary>
+    void OnApplicationQuit()
+    {
+        // See https://forum.unity.com/threads/problem-with-callbacks.87513/
+#if UNITY_EDITOR
+        Phantom.Close();
+
+        Debug.Log("EDITOR NO CLOSE...");
+#elif UNITY_STANDALONE_WIN //Seemingly fires in editor as well...
+        Phantom.Close();
+        System.Diagnostics.Process.GetCurrentProcess().Kill();
+#endif
+    }
+
+    /// <summary>
+    /// 開始時の処理
+    /// </summary>
+    void Start () {
 		// 球体の一覧を作成
 		SphereList = GameObject.FindObjectsOfType<PhantomRigidSphere>();
 	}
