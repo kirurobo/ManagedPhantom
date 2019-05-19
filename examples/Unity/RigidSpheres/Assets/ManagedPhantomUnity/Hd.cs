@@ -315,7 +315,7 @@ namespace ManagedPhantom
         public static extern void hdStartScheduler();
 
         [DllImport("hd.dll")]
-        public static extern bool hdWaitForCompletion([MarshalAs(UnmanagedType.U4)] uint schedulerHandle, WaiteCode waitCode);
+        public static extern bool hdWaitForCompletion([MarshalAs(UnmanagedType.U8)] ulong schedulerHandle, WaiteCode waitCode);
 
         [DllImport("hd.dll")]
         public static extern void hdStopScheduler();
